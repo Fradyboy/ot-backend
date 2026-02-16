@@ -1,8 +1,52 @@
+from fastapi import Depends, HTTPException, status
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from jose import jwt, JWTError
+from passlib.context import CryptContext
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from datetime import datetime, timedelta
 
 app = FastAPI()
+
+SECRET_KEY = "CHANGE_THIS_SECRET"
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 60
+
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
+
+# Admin+User
+fake_users_db = {
+    "admin": {
+        "username": "admin",
+        "hashed_password": pwd_context.hash("admin123"),
+        "role": "admin",
+    },
+    "user": {
+        "username": "user",
+        "hashed_password": pwd_context.hash("user123"),
+        "role": "OT Assistant",
+    },
+}
+
+def verify_password(plain, hashed):
+    return pwd_context.verify(plain, hashed)
+
+def authenticate_user(username: str, password: str):
+    user = fake_users_db.get(username)
+    if not user:
+        return None
+    if not verify_password(password, user["hashed_password"]):
+        return None
+    return user
+
+def create_access_token(data: dict, expires_delta: timedelta | None = None):
+    to_encode = data.copy()
+    expire = datetime.utcnow() + (
+        expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    )
+    to_encode.update({"exp": expire})
+    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
 app.add_middleware(
     CORSMiddleware,
@@ -117,9 +161,16 @@ def end_surgery(ot_name: str = Query(...)):
 
 # SURGERY TYPE REPORT
 @app.get("/surgery-type-report")
-def surgery_type_report():
+def surgery_type_report(
+    user=Depends(get_current_user)
+):
+    if user["role"] != "admin":
+        raise HTTPException(
+            status_code=403
+            detail="Admin only",
+        )
+    
     report = {}
-
     for ot in ots.values():
         for record in ot["history" ]:
             s_type = record["surgery_type"] or "Unknown"
@@ -127,3 +178,39 @@ def surgery_type_report():
 
 
     return report
+
+# Login Api
+@app.post("/login")
+def login(form_data: OAuth2PasswordRequestForm = Depends()):
+    user = authenticate_user(
+        form_data.username, form_data.password
+    )
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid credentials",
+        )
+    
+    token = create_access_token(
+        data={
+            "sub": user["username"],
+            "role": user["role"],
+        }
+    )
+
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "role": user["role"],
+    }
+
+def get_current_user(token: str = Depends(oauth2_scheme)):
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        username: str = payload.get("sub")
+        role: str = payload.get("role")
+        if username is None:
+            raise HTTPException(status_code=401)
+        return {"username": username, "role": role}
+    except JWTError:
+        raise HTTPException(status_code=401)
