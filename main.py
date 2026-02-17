@@ -213,4 +213,5 @@ def get_current_user(token: str = Depends(oauth2_scheme)):
             raise HTTPException(status_code=401)
         return {"username": username, "role": role}
     except JWTError:
+
         raise HTTPException(status_code=401)
