@@ -219,3 +219,4 @@ def surgery_type_report(
 
 
     return report
+
